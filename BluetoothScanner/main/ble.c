@@ -2,8 +2,10 @@
 
 static uint8_t adv_config_done = 0;
 
-static wifi_configuration_received_callback wifi_ssid_callback;
-static wifi_configuration_received_callback wifi_password_callback;
+static configuration_received_callback wifi_ssid_callback;
+static configuration_received_callback wifi_password_callback;
+static configuration_received_callback broker_ip_callback;
+static configuration_received_callback board_name_callback;
 
 // UUIDs for BLE
 static const uint8_t WIFI_CONFIG_SERVICE_UUID_128[16] = {
@@ -18,6 +20,16 @@ static const uint8_t WIFI_SSID_CHAR_UUID_128[16] = {
 
 static const uint8_t WIFI_PASS_CHAR_UUID_128[16] = {
     0x00, 0x00, 0xFF, 0x02, 0x00, 0x10, 0x00, 0x80,
+    0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB, 0x00, 0x00
+};
+
+static const uint8_t BROKER_IP_CHAR_UUID_128[16] = {
+    0x00, 0x00, 0xFF, 0x03, 0x00, 0x10, 0x00, 0x80,
+    0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB, 0x00, 0x00
+};
+
+static const uint8_t BOARD_NAME_CHAR_UUID_128[16] = {
+    0x00, 0x00, 0xFF, 0x04, 0x00, 0x10, 0x00, 0x80,
     0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB, 0x00, 0x00
 };
 
@@ -120,20 +132,60 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
     case ESP_GATTS_CREATE_EVT:
         gl_profile_tab[PROFILE_APP_ID].service_handle = param->create.service_handle;
         {
+			esp_attr_value_t attr_value = {
+	            .attr_max_len = 32,
+	            .attr_len = 0,   
+	            .attr_value = NULL,
+	        };
+			
             esp_bt_uuid_t ssid_uuid = { .len = ESP_UUID_LEN_128 };
             memcpy(ssid_uuid.uuid.uuid128, WIFI_SSID_CHAR_UUID_128, ESP_UUID_LEN_128);
             esp_ble_gatts_add_char(gl_profile_tab[PROFILE_APP_ID].service_handle, &ssid_uuid,
                                    ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE,
-                                   NULL, NULL);
+                                   &attr_value, NULL);
         }
 
         {
+			esp_attr_value_t attr_value = {
+	            .attr_max_len = 32,
+	            .attr_len = 0,   
+	            .attr_value = NULL,
+	        };
+			
             esp_bt_uuid_t pass_uuid = { .len = ESP_UUID_LEN_128 };
             memcpy(pass_uuid.uuid.uuid128, WIFI_PASS_CHAR_UUID_128, ESP_UUID_LEN_128);
             esp_ble_gatts_add_char(gl_profile_tab[PROFILE_APP_ID].service_handle, &pass_uuid,
                                    ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE,
-                                   NULL, NULL);
+                                   &attr_value, NULL);
         }
+        
+        {
+			esp_attr_value_t attr_value = {
+	            .attr_max_len = 32,
+	            .attr_len = 0,   
+	            .attr_value = NULL,
+	        };
+			
+		    esp_bt_uuid_t broker_ip_uuid = { .len = ESP_UUID_LEN_128 };
+		    memcpy(broker_ip_uuid.uuid.uuid128, BROKER_IP_CHAR_UUID_128, ESP_UUID_LEN_128);
+		    esp_ble_gatts_add_char(gl_profile_tab[PROFILE_APP_ID].service_handle, &broker_ip_uuid,
+		                           ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE,
+		                           &attr_value, NULL);
+		}
+		
+		{		
+			esp_attr_value_t attr_value = {
+	            .attr_max_len = 32,
+	            .attr_len = 0,   
+	            .attr_value = NULL,
+	        };
+			
+		    esp_bt_uuid_t board_name_uuid = { .len = ESP_UUID_LEN_128 };
+		    memcpy(board_name_uuid.uuid.uuid128, BOARD_NAME_CHAR_UUID_128, ESP_UUID_LEN_128);
+		    esp_ble_gatts_add_char(gl_profile_tab[PROFILE_APP_ID].service_handle, &board_name_uuid,
+		                           ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE,
+		                           &attr_value, NULL);
+		}
 
         esp_ble_gatts_start_service(gl_profile_tab[PROFILE_APP_ID].service_handle);
         break;
@@ -146,6 +198,13 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             gl_profile_tab[PROFILE_APP_ID].pass_char_handle = param->add_char.attr_handle;
             ESP_LOGI(GATTS_TAG, "PASS CHAR HANDLE = %d", param->add_char.attr_handle);
         }
+        if (memcmp(param->add_char.char_uuid.uuid.uuid128, BROKER_IP_CHAR_UUID_128, ESP_UUID_LEN_128) == 0) {
+		    gl_profile_tab[PROFILE_APP_ID].broker_ip_char_handle = param->add_char.attr_handle;
+		    ESP_LOGI(GATTS_TAG, "BROKER IP CHAR HANDLE = %d", param->add_char.attr_handle);
+		} else if (memcmp(param->add_char.char_uuid.uuid.uuid128, BOARD_NAME_CHAR_UUID_128, ESP_UUID_LEN_128) == 0) {
+		    gl_profile_tab[PROFILE_APP_ID].board_name_char_handle = param->add_char.attr_handle;
+		    ESP_LOGI(GATTS_TAG, "BOARD NAME CHAR HANDLE = %d", param->add_char.attr_handle);
+		}
         break;
         
     case ESP_GATTS_WRITE_EVT: {
@@ -161,6 +220,13 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
                 ESP_LOGI(GATTS_TAG, "Received Password: %s", str_value);
                 wifi_password_callback(str_value);
             }
+            if (param->write.handle == gl_profile_tab[PROFILE_APP_ID].broker_ip_char_handle) {
+			    ESP_LOGI(GATTS_TAG, "Received Broker IP: %s", str_value);
+			    broker_ip_callback(str_value);
+			} else if (param->write.handle == gl_profile_tab[PROFILE_APP_ID].board_name_char_handle) {
+			    ESP_LOGI(GATTS_TAG, "Received Board Name: %s", str_value);
+			    board_name_callback(str_value);
+			}
 
             free(str_value);
         }
@@ -197,11 +263,15 @@ void gatts_event_handler(esp_gatts_cb_event_t event,
     }
 }
 
-void initialize_ble(wifi_configuration_received_callback ssid_callback, 
-					wifi_configuration_received_callback password_callback) {
+void initialize_ble(configuration_received_callback ssid_callback, 
+					configuration_received_callback password_callback,
+					configuration_received_callback _broker_ip_callback, 
+					configuration_received_callback _board_name_callback) {
 								
 	wifi_ssid_callback = ssid_callback;
 	wifi_password_callback = password_callback; 					
+	broker_ip_callback = _broker_ip_callback;
+	board_name_callback = _board_name_callback;
 								
 	ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();

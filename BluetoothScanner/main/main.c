@@ -3,16 +3,22 @@
 #include "lcd_i2c.h"
 #include "esp_system.h"
 #include "mqtt_client.h"
+#include "ble_scanner.h"
 
 #define NVS_NAMESPACE "wifi_config"
 #define NVS_KEY_SSID  "ssid"
 #define NVS_KEY_PASS  "password"
 
+#define NVS_KEY_BROKER "broker"
+#define NVS_KEY_BOARD_NAME "board_name"
+
+#define DEFAULT_BOARD_NAME "pokoj_1"
+
 // Button configuration
 #define BUTTON_GPIO        GPIO_NUM_0
 #define BUTTON_ACTIVE_LEVEL 0
 
-#define MQTT_BROKER_IP "mqtt://192.168.159.246"
+#define DEFAULT_MQTT_BROKER_IP "mqtt://192.168.241.246"
 
 // Wi-Fi variables
 static EventGroupHandle_t wifi_event_group = NULL;
@@ -21,6 +27,9 @@ const int WIFI_DISCONNECTED_BIT = BIT1;
 static bool wifi_connected = false;
 static bool wifi_mode = false; // Wi-Fi connection mode ON/OFF
 static bool mqtt_connected = false;
+
+static char board_name[30] = {0};
+static char broker_ip[30] = {0};
 
 static void wifi_init_sta(const char *ssid, const char *pass);
 static void wifi_stop(void);
@@ -88,6 +97,59 @@ static bool print_current_nvs_creds(void) {
     
     lcd_send_string(pass);
     
+    return true;
+}
+
+static bool get_broker_ip_from_nvs(char* broker_ip, size_t len) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+
+    // Otwarcie przestrzeni nazw NVS w trybie tylko do odczytu
+    err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGI(GATTS_TAG, "No NVS Namespace found");
+        snprintf(broker_ip, len, DEFAULT_MQTT_BROKER_IP);  // Domyślny adres IP brokera
+        return false;
+    }
+
+    // Odczytanie wartości IP brokera z NVS
+    err = nvs_get_str(nvs_handle, NVS_KEY_BROKER, broker_ip, &len);
+    nvs_close(nvs_handle);
+
+    if (err != ESP_OK) {
+        ESP_LOGI(GATTS_TAG, "No broker IP in NVS, using default");
+        snprintf(broker_ip, len, DEFAULT_MQTT_BROKER_IP);  // Domyślny adres IP brokera
+        return false;
+    }
+
+    ESP_LOGI(GATTS_TAG, "Broker IP from NVS: %s", broker_ip);
+    return true;
+}
+
+// Funkcja do odczytu nazwy płytki
+static bool get_board_name_from_nvs(char* board_name, size_t len) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+
+    // Otwarcie przestrzeni nazw NVS w trybie tylko do odczytu
+    err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGI(GATTS_TAG, "No NVS Namespace found");
+        snprintf(board_name, len, DEFAULT_BOARD_NAME);  // Domyślna nazwa płytki
+        return false;
+    }
+
+    // Odczytanie nazwy płytki z NVS
+    err = nvs_get_str(nvs_handle, NVS_KEY_BOARD_NAME, board_name, &len);
+    nvs_close(nvs_handle);
+
+    if (err != ESP_OK) {
+        ESP_LOGI(GATTS_TAG, "No board name in NVS, using default");
+        snprintf(board_name, len, DEFAULT_BOARD_NAME);  // Domyślna nazwa płytki
+        return false;
+    }
+
+    ESP_LOGI(GATTS_TAG, "Board name from NVS: %s", board_name);
     return true;
 }
 
@@ -304,6 +366,20 @@ void on_password_received(const char* password) {
 	print_current_nvs_creds();
 }
 
+void on_broker_ip_received(const char* broker_ip) {
+	char prefixed_broker_ip[64];
+
+    snprintf(prefixed_broker_ip, sizeof(prefixed_broker_ip), "mqtt://%s", broker_ip);
+
+    save_str_to_nvs(NVS_KEY_BROKER, prefixed_broker_ip);
+
+    ESP_LOGI(MAIN_TAG, "Saved broker IP: %s", prefixed_broker_ip);
+}
+
+void on_board_name_received(const char* board_name) {
+	save_str_to_nvs(NVS_KEY_BOARD_NAME, board_name);
+}
+
 static void log_error_if_nonzero(const char *message, int error_code)
 {
     if (error_code != 0) {
@@ -327,8 +403,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         //msg_id = esp_mqtt_client_publish(client, "/topic/ble_devices", "device:smartphone3;rssi:-48", 0, 1, 0);
         mqtt_connected = true;
         
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/messages", 0);  // 0 to QoS (Quality of Service)
-        ESP_LOGI(MAIN_TAG, "Subscribed to /topic/ble_devices, msg_id=%d", msg_id);
+        msg_id = esp_mqtt_client_subscribe(client, "/boards_command", 0);  // 0 to QoS (Quality of Service)
+        ESP_LOGI(MAIN_TAG, "Subscribed to /boards_command, msg_id=%d", msg_id);
+        
+        msg_id = esp_mqtt_client_publish(client, "/boards", board_name, 0, 1, 0);
+        ESP_LOGI(MAIN_TAG, "Published board name '%s' to topic '%s', msg_id=%d", board_name, "boards", msg_id);
         
         ESP_LOGI(MAIN_TAG, "sent publish successful, msg_id=%d", msg_id);
         break;
@@ -339,8 +418,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
     case MQTT_EVENT_SUBSCRIBED:
         ESP_LOGI(MAIN_TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-        //msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
-        ESP_LOGI(MAIN_TAG, "sent publish successful, msg_id=%d", msg_id);
         break;
     case MQTT_EVENT_UNSUBSCRIBED:
         ESP_LOGI(MAIN_TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
@@ -349,12 +426,25 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(MAIN_TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
         break;
     case MQTT_EVENT_DATA:
+    	ESP_LOGI(MAIN_TAG, "MQTT_EVENT_DATA");
+    
+    	// Wyświetlenie topicu i wiadomości
+    	printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+    	printf("DATA=%.*s\r\n", event->data_len, event->data);
+    
         ESP_LOGI(MAIN_TAG, "MQTT_EVENT_DATA");
-        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-        printf("DATA=%.*s\r\n", event->data_len, event->data);
-        lcd_clear();
-        lcd_first_line();
-        lcd_send_char_array(event->data, event->data_len);
+        
+        if (event->topic_len == strlen("/boards_command") && 
+            strncmp(event->topic, "/boards_command", event->topic_len) == 0 &&
+            event->data_len == strlen("introduce") && 
+            strncmp((char*)event->data, "introduce", event->data_len) == 0) {
+            
+            char topic[50];
+            snprintf(topic, sizeof(topic), "/boards");
+            
+            msg_id = esp_mqtt_client_publish(client, topic, board_name, 0, 1, 0);
+            ESP_LOGI(MAIN_TAG, "Published board name '%s' to topic '%s', msg_id=%d", board_name, topic, msg_id);
+        }
         break;
     case MQTT_EVENT_ERROR:
         ESP_LOGI(MAIN_TAG, "MQTT_EVENT_ERROR");
@@ -374,8 +464,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
 static void mqtt_app_start(void)
 {
+	if (get_broker_ip_from_nvs(broker_ip, sizeof(board_name))) {
+        ESP_LOGI(MAIN_TAG, "Got broker IP: %s", broker_ip);
+    } else {
+		ESP_LOGI(MAIN_TAG, "Using default broker IP: %s", broker_ip);
+	}
+	
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = MQTT_BROKER_IP,
+        .broker.address.uri = broker_ip,
     };
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
@@ -385,10 +481,30 @@ static void mqtt_app_start(void)
 static void mqtt_task() {
 	while(1) {
 		if(mqtt_connected) {
-			int msg_id = esp_mqtt_client_publish(mqtt_client, "/topic/ble_devices", "device:smartphone3;rssi:-48", 0, 1, 0);
-        	ESP_LOGI(MAIN_TAG, "sent publish successful, msg_id=%d", msg_id);
+			// int msg_id = esp_mqtt_client_publish(mqtt_client, "/topic/ble_devices", "device:smartphone3;rssi:-48", 0, 1, 0);
+        	// ESP_LOGI(MAIN_TAG, "sent publish successful, msg_id=%d", msg_id);
 		}
 		vTaskDelay(pdMS_TO_TICKS(5000));
+	}
+}
+
+static void on_ble_device_discovery(const char* name, const char* address, int rssi) {
+	ESP_LOGI(GATTS_TAG, "Device discovered:");
+    ESP_LOGI(GATTS_TAG, "Name: %s", name);   
+    ESP_LOGI(GATTS_TAG, "Address: %s", address); 
+    ESP_LOGI(GATTS_TAG, "RSSI: %d", rssi);
+    
+    if(mqtt_connected) {
+        char topic[50];
+        snprintf(topic, sizeof(topic), "/%s/devices", board_name);
+
+        char message[200];
+        snprintf(message, sizeof(message),
+                 "{\"name\": \"%s\", \"address\": \"%s\", \"rssi\": %d}",
+                 name, address, rssi);
+
+        int msg_id = esp_mqtt_client_publish(mqtt_client, topic, message, 0, 1, 0);
+        ESP_LOGI(GATTS_TAG, "Published message '%s' to topic '%s', msg_id=%d", message, topic, msg_id);
 	}
 }
 
@@ -409,7 +525,13 @@ void app_main(void)
     // Initialize netif and event loop once
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-
+	
+	if (get_board_name_from_nvs(board_name, sizeof(board_name))) {
+        ESP_LOGI(MAIN_TAG, "Got board name: %s", board_name);
+    } else {
+		ESP_LOGI(MAIN_TAG, "Using default board name: %s", board_name);
+	}
+	
     // Start with Wi-Fi mode ON
     wifi_mode = true;
 
@@ -419,7 +541,12 @@ void app_main(void)
 	ESP_LOGI(MAIN_TAG, "Attempting to connect Wi-Fi with stored creds...");
 	wifi_try_connect_from_nvs();
 	
-	initialize_ble(&on_ssid_received, &on_password_received);
+	initialize_ble(&on_ssid_received,
+	&on_password_received,
+	&on_broker_ip_received,
+	&on_board_name_received);
+	
+	initialize_ble_scanner(on_ble_device_discovery);
 
     // Create a task to handle the button (short press toggles Wi-Fi mode)
     xTaskCreate(button_task, "button_task", 8192, NULL, 5, NULL);
