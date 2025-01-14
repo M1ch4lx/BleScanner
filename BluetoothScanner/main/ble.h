@@ -5,13 +5,15 @@
 
 #define PROFILE_NUM 1
 #define PROFILE_APP_ID 0
-#define GATTS_NUM_HANDLE 10
+#define GATTS_NUM_HANDLE 12
 #define PREPARE_BUF_MAX_SIZE 1024
 
 #define adv_config_flag      (1 << 0)
 #define scan_rsp_config_flag (1 << 1)
 
-typedef void (*configuration_received_callback)(const char*);
+#define RETRIVE_BUFFER_SIZE 40
+
+typedef void (*configuration_received_callback)(const char*, char*);
 
 struct gatts_profile_inst {
     esp_gatts_cb_t gatts_cb;
@@ -23,6 +25,7 @@ struct gatts_profile_inst {
     uint16_t pass_char_handle;
     uint16_t broker_ip_char_handle;
     uint16_t board_name_char_handle;
+    uint16_t restart_char_handle;
 };
 
 typedef struct {

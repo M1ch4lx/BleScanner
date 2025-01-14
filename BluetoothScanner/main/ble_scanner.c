@@ -37,9 +37,9 @@ void gap_scan_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t
 				uint8_t* name = esp_ble_resolve_adv_data(scan_result->ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &length);
 				
                 if (name) {
-					ESP_LOGI(GATTS_TAG, "Device found: RSSI = %d, Addr: %s", rssi, addr_str);
+					//ESP_LOGI(GATTS_TAG, "Device found: RSSI = %d, Addr: %s", rssi, addr_str);
 					
-                    ESP_LOGI(GATTS_TAG, "Device name: %s", name);
+                    //ESP_LOGI(GATTS_TAG, "Device name: %s", name);
                     
                     on_discovery_callback((char*)name, addr_str, rssi);                        
                 }

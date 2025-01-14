@@ -20,6 +20,10 @@
 
 #define DEFAULT_MQTT_BROKER_IP "mqtt://192.168.241.246"
 
+#include "driver/gpio.h"
+
+#define LED_PIN GPIO_NUM_18 // Wybierz GPIO dla diody LED
+
 // Wi-Fi variables
 static EventGroupHandle_t wifi_event_group = NULL;
 const int WIFI_CONNECTED_BIT = BIT0;
@@ -34,6 +38,22 @@ static char broker_ip[30] = {0};
 static void wifi_init_sta(const char *ssid, const char *pass);
 static void wifi_stop(void);
 static void wifi_try_connect_from_nvs(void);
+
+// Funkcja taska migania diodą LED
+void blink_led_task(void *pvParameter) {
+    // Konfiguracja GPIO jako wyjścia (jeśli nie została wcześniej ustawiona)
+    gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
+
+    while (true) { // Miganie 2 razy
+    	
+    	if(!mqtt_connected) {
+			gpio_set_level(LED_PIN, 1);
+			vTaskDelay(pdMS_TO_TICKS(1000));
+        	gpio_set_level(LED_PIN, 0);
+		}
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
 
 ////////////////////////////////////////
 // NVS Handling
@@ -150,6 +170,31 @@ static bool get_board_name_from_nvs(char* board_name, size_t len) {
     }
 
     ESP_LOGI(GATTS_TAG, "Board name from NVS: %s", board_name);
+    return true;
+}
+
+// Funkcja do odczytu nazwy płytki
+static bool get_wifi_ssid_from_nvs(char* wifi_ssid, size_t len) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+
+    err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGI(GATTS_TAG, "No NVS Namespace found");
+        snprintf(wifi_ssid, len, "not set");
+        return false;
+    }
+
+    err = nvs_get_str(nvs_handle, NVS_KEY_SSID, wifi_ssid, &len);
+    nvs_close(nvs_handle);
+
+    if (err != ESP_OK) {
+        ESP_LOGI(GATTS_TAG, "No wifi ssid in NVS");
+        snprintf(wifi_ssid, len, "not set");
+        return false;
+    }
+
+    ESP_LOGI(GATTS_TAG, "Board name from NVS: %s", wifi_ssid);
     return true;
 }
 
@@ -354,30 +399,46 @@ static void button_task(void *arg) {
 // Main Application
 ////////////////////////////////////////
 
-void on_ssid_received(const char* ssid) {
-	save_str_to_nvs(NVS_KEY_SSID, ssid);
+void on_ssid_received(const char* ssid, char* retrive_buffer) {
+	if(retrive_buffer) {
+		get_wifi_ssid_from_nvs(retrive_buffer, RETRIVE_BUFFER_SIZE);
+	}
+	else {
+		save_str_to_nvs(NVS_KEY_SSID, ssid);
 	
-	print_current_nvs_creds();
+		print_current_nvs_creds();
+	}
 }
 
-void on_password_received(const char* password) {
+void on_password_received(const char* password, char* retrive_buffer) {
 	save_str_to_nvs(NVS_KEY_PASS, password);
 	
 	print_current_nvs_creds();
 }
 
-void on_broker_ip_received(const char* broker_ip) {
-	char prefixed_broker_ip[64];
+void on_broker_ip_received(const char* broker_ip, char* retrive_buffer) {
+	if(retrive_buffer) {
+		get_broker_ip_from_nvs(retrive_buffer, RETRIVE_BUFFER_SIZE);
+	}
+	else {
+		char prefixed_broker_ip[64];
 
-    snprintf(prefixed_broker_ip, sizeof(prefixed_broker_ip), "mqtt://%s", broker_ip);
+    	snprintf(prefixed_broker_ip, sizeof(prefixed_broker_ip), "mqtt://%s", broker_ip);
 
-    save_str_to_nvs(NVS_KEY_BROKER, prefixed_broker_ip);
+    	save_str_to_nvs(NVS_KEY_BROKER, prefixed_broker_ip);
 
-    ESP_LOGI(MAIN_TAG, "Saved broker IP: %s", prefixed_broker_ip);
+    	ESP_LOGI(MAIN_TAG, "Saved broker IP: %s", prefixed_broker_ip);
+	}
 }
 
-void on_board_name_received(const char* board_name) {
-	save_str_to_nvs(NVS_KEY_BOARD_NAME, board_name);
+void on_board_name_received(const char* board_name, char* retrive_buffer) {
+	
+	if(retrive_buffer) {
+		get_board_name_from_nvs(retrive_buffer, RETRIVE_BUFFER_SIZE);
+	}
+	else {
+		save_str_to_nvs(NVS_KEY_BOARD_NAME, board_name);
+	}
 }
 
 static void log_error_if_nonzero(const char *message, int error_code)
@@ -489,10 +550,10 @@ static void mqtt_task() {
 }
 
 static void on_ble_device_discovery(const char* name, const char* address, int rssi) {
-	ESP_LOGI(GATTS_TAG, "Device discovered:");
-    ESP_LOGI(GATTS_TAG, "Name: %s", name);   
-    ESP_LOGI(GATTS_TAG, "Address: %s", address); 
-    ESP_LOGI(GATTS_TAG, "RSSI: %d", rssi);
+	//ESP_LOGI(GATTS_TAG, "Device discovered:");
+    //ESP_LOGI(GATTS_TAG, "Name: %s", name);   
+    //ESP_LOGI(GATTS_TAG, "Address: %s", address); 
+    //ESP_LOGI(GATTS_TAG, "RSSI: %d", rssi);
     
     if(mqtt_connected) {
         char topic[50];
@@ -545,7 +606,6 @@ void app_main(void)
 	&on_password_received,
 	&on_broker_ip_received,
 	&on_board_name_received);
-	
 	initialize_ble_scanner(on_ble_device_discovery);
 
     // Create a task to handle the button (short press toggles Wi-Fi mode)
@@ -560,4 +620,6 @@ void app_main(void)
     // BLE is active and advertising
     // Press and release the button to toggle Wi-Fi mode ON/OFF
     // Update SSID/PASS via BLE anytime
+    
+    xTaskCreate(blink_led_task, "Blink LED Task", 2048, NULL, 5, NULL);
 }

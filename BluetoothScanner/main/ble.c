@@ -33,6 +33,11 @@ static const uint8_t BOARD_NAME_CHAR_UUID_128[16] = {
     0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB, 0x00, 0x00
 };
 
+static const uint8_t RESTART_CHAR_UUID_128[16] = {
+    0x00, 0x00, 0xFF, 0x05, 0x00, 0x10, 0x00, 0x80,
+    0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB, 0x00, 0x00
+};
+
 static esp_ble_adv_data_t adv_data = {
     .set_scan_rsp = false,
     .include_name = true,
@@ -141,7 +146,7 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             esp_bt_uuid_t ssid_uuid = { .len = ESP_UUID_LEN_128 };
             memcpy(ssid_uuid.uuid.uuid128, WIFI_SSID_CHAR_UUID_128, ESP_UUID_LEN_128);
             esp_ble_gatts_add_char(gl_profile_tab[PROFILE_APP_ID].service_handle, &ssid_uuid,
-                                   ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE,
+                                   ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE,
                                    &attr_value, NULL);
         }
 
@@ -169,7 +174,7 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 		    esp_bt_uuid_t broker_ip_uuid = { .len = ESP_UUID_LEN_128 };
 		    memcpy(broker_ip_uuid.uuid.uuid128, BROKER_IP_CHAR_UUID_128, ESP_UUID_LEN_128);
 		    esp_ble_gatts_add_char(gl_profile_tab[PROFILE_APP_ID].service_handle, &broker_ip_uuid,
-		                           ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE,
+		                           ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE,
 		                           &attr_value, NULL);
 		}
 		
@@ -183,7 +188,21 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 		    esp_bt_uuid_t board_name_uuid = { .len = ESP_UUID_LEN_128 };
 		    memcpy(board_name_uuid.uuid.uuid128, BOARD_NAME_CHAR_UUID_128, ESP_UUID_LEN_128);
 		    esp_ble_gatts_add_char(gl_profile_tab[PROFILE_APP_ID].service_handle, &board_name_uuid,
-		                           ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE,
+		                          ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE,
+		                           &attr_value, NULL);
+		}
+		
+		{		
+			esp_attr_value_t attr_value = {
+	            .attr_max_len = 32,
+	            .attr_len = 0,   
+	            .attr_value = NULL,
+	        };
+			
+		    esp_bt_uuid_t restart_uuid = { .len = ESP_UUID_LEN_128 };
+		    memcpy(restart_uuid.uuid.uuid128, RESTART_CHAR_UUID_128, ESP_UUID_LEN_128);
+		    esp_ble_gatts_add_char(gl_profile_tab[PROFILE_APP_ID].service_handle, &restart_uuid,
+		                          ESP_GATT_PERM_WRITE, ESP_GATT_CHAR_PROP_BIT_WRITE,
 		                           &attr_value, NULL);
 		}
 
@@ -204,6 +223,9 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 		} else if (memcmp(param->add_char.char_uuid.uuid.uuid128, BOARD_NAME_CHAR_UUID_128, ESP_UUID_LEN_128) == 0) {
 		    gl_profile_tab[PROFILE_APP_ID].board_name_char_handle = param->add_char.attr_handle;
 		    ESP_LOGI(GATTS_TAG, "BOARD NAME CHAR HANDLE = %d", param->add_char.attr_handle);
+		} else if (memcmp(param->add_char.char_uuid.uuid.uuid128, RESTART_CHAR_UUID_128, ESP_UUID_LEN_128) == 0) {
+		    gl_profile_tab[PROFILE_APP_ID].restart_char_handle = param->add_char.attr_handle;
+		    ESP_LOGI(GATTS_TAG, "RESTART CHAR HANDLE = %d", param->add_char.attr_handle);
 		}
         break;
         
@@ -215,18 +237,21 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 
             if (param->write.handle == gl_profile_tab[PROFILE_APP_ID].ssid_char_handle) {
                 ESP_LOGI(GATTS_TAG, "Received SSID: %s", str_value);
-                wifi_ssid_callback(str_value);
+                wifi_ssid_callback(str_value, NULL);
             } else if (param->write.handle == gl_profile_tab[PROFILE_APP_ID].pass_char_handle) {
                 ESP_LOGI(GATTS_TAG, "Received Password: %s", str_value);
-                wifi_password_callback(str_value);
+                wifi_password_callback(str_value, NULL);
             }
             if (param->write.handle == gl_profile_tab[PROFILE_APP_ID].broker_ip_char_handle) {
 			    ESP_LOGI(GATTS_TAG, "Received Broker IP: %s", str_value);
-			    broker_ip_callback(str_value);
+			    broker_ip_callback(str_value, NULL);
 			} else if (param->write.handle == gl_profile_tab[PROFILE_APP_ID].board_name_char_handle) {
 			    ESP_LOGI(GATTS_TAG, "Received Board Name: %s", str_value);
-			    board_name_callback(str_value);
-			}
+			    board_name_callback(str_value, NULL);
+			} else if (param->write.handle == gl_profile_tab[PROFILE_APP_ID].restart_char_handle) {
+				ESP_LOGI(GATTS_TAG, "RESTARTING BOARD");
+                esp_restart();
+            }
 
             free(str_value);
         }
@@ -245,6 +270,36 @@ void gatts_profile_event_handler(esp_gatts_cb_event_t event,
         ESP_LOGI(GATTS_TAG, "Client disconnected, restarting advertising...");
         esp_ble_gap_start_advertising(&adv_params);
         break;
+	case ESP_GATTS_READ_EVT: {
+            uint16_t char_handle = param->read.handle;
+            esp_gatt_rsp_t rsp;
+            memset(&rsp, 0, sizeof(esp_gatt_rsp_t));
+            rsp.attr_value.handle = param->read.handle;
+            char char_retrive_buffer[RETRIVE_BUFFER_SIZE] = {0};
+            int buffer_offset = 0;
+            
+            ESP_LOGI(GATTS_TAG, "Reading characteristic");
+
+            if (char_handle == gl_profile_tab[PROFILE_APP_ID].ssid_char_handle) {             
+				wifi_ssid_callback(NULL, char_retrive_buffer);
+            } else if (char_handle == gl_profile_tab[PROFILE_APP_ID].broker_ip_char_handle) {
+				broker_ip_callback(NULL, char_retrive_buffer);
+				// mqtt://
+				buffer_offset = 7;
+				
+            } else if (char_handle == gl_profile_tab[PROFILE_APP_ID].board_name_char_handle) {
+                board_name_callback(NULL, char_retrive_buffer);
+            }
+            
+            ESP_LOGI(GATTS_TAG, "Characteristic value: %s", char_retrive_buffer);                
+			
+			rsp.attr_value.len = strlen(char_retrive_buffer + buffer_offset);
+            memcpy(rsp.attr_value.value, char_retrive_buffer + buffer_offset, rsp.attr_value.len);
+			
+            esp_ble_gatts_send_response(gatts_if, param->read.conn_id, 
+                                        param->read.trans_id, ESP_GATT_OK, &rsp);
+            break;
+        }
     default:
         break;
     }
