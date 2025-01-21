@@ -550,10 +550,10 @@ static void mqtt_task() {
 }
 
 static void on_ble_device_discovery(const char* name, const char* address, int rssi) {
-	//ESP_LOGI(GATTS_TAG, "Device discovered:");
-    //ESP_LOGI(GATTS_TAG, "Name: %s", name);   
-    //ESP_LOGI(GATTS_TAG, "Address: %s", address); 
-    //ESP_LOGI(GATTS_TAG, "RSSI: %d", rssi);
+	ESP_LOGI(GATTS_TAG, "Device discovered:");
+    ESP_LOGI(GATTS_TAG, "Name: %s", name);   
+    ESP_LOGI(GATTS_TAG, "Address: %s", address); 
+    ESP_LOGI(GATTS_TAG, "RSSI: %d", rssi);
     
     if(mqtt_connected) {
         char topic[50];
